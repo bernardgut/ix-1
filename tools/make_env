@@ -1,0 +1,508 @@
+#!/usr/bin/env bash
+###################################################################################
+# make_env.sh
+
+# this allows you to run IX out of the box. make_env sets the local env
+# parameters to allow IX to run. These parameters currently are :
+# - load dune kernel module
+# - load pdidma kernel module
+# - unload current NIC driver kernel module
+# - allow hugepages (2048KB)
+# - set up virtual interface(s) (optional)
+# It assumes that you currently have a working network configuration.
+#
+# EXAMPLES :
+# To set up the environment for IX on eth0:
+#    make_env ix -d deps/dune/kern/dune.ko -p deps/pcidma/pcidma.ko eth0
+#
+# To set back the environment config
+#    make_env linux -i 192.168.19.1/16 eth0 ixgbe
+#
+# To set up the environment for IX on a VF bound to eth0 without changing eth0
+# configuration :
+#    make_env ix -d deps/dune/kern/dune.ko -p deps/pcidma/pcidma.ko --numvfs 1 eth0
+##################################################################################
+set -ex
+
+# stdout colors
+G='\x1b[32m'
+W='\x1b[0m'
+
+usage_ix ()
+{
+    echo "usage: $(basename "$0") ix [-d|--dune PATH] [-p|--pcidma PATH] [-n|--numvfs #VFS] INTERFACE"
+    echo "    Set UP local env for IX network stack (possibly on VFs).
+    Params :
+    -d|--dune PATH     path to dune.ko.
+    -p|--pcidma PATH   path to pcidma.ko
+    -n|--numfvs #VFS   sets up #VFS virtual functions on device INTERFACE
+    INTERFACE          NIC logical name."
+}
+
+usage_linux()
+{
+    echo "usage: $0 linux [-i|--ip IP] [-v|--vfip IP] INTERFACE DRIVER"
+    echo "    Allows you to reload linux standard network stack (with VFs).
+    Params :
+    -i|--ip IP     IP to assign to INTERFACE. CIDR format
+    -v|--vfip IP   Create virtual function and give it IP network configuration.
+                   IP in CIDR format. Repeating parameter.
+    INTERFACE      NIC logical name.
+    DRIVER         NIC default kernel driver (ixgbe, i40e, ...)"
+}
+
+usage()
+{
+    echo "usage: $0 [linux|ix] ... [-h|--help]"
+}
+
+init_linux()
+{
+    #optional args
+    getopt_results=$(getopt -s bash -o i:v:h --long ip:,vfip:,help -- "$@")
+    if test $? != 0
+    then
+        echo "unrecognized option"
+        exit 1
+    fi
+    eval set -- "$getopt_results"
+
+    argv__IP=""
+    argv__VFIP=()
+    while true
+    do
+        case "$1" in
+            -i|--ip)
+                argv__IP=$2
+                shift 2
+                ;;
+            -v|--vfip)
+                argv__VFIP+=("$2")
+                shift 2
+                ;;
+            -h|--help)
+                usage_linux
+                exit 0
+                ;;
+            --)
+                shift
+                break
+                ;;
+            *)
+                EXCEPTION=$Main__ParameterException
+                EXCEPTION_MSG="unparseable option $1"
+                exit 1
+                ;;
+        esac
+    done
+
+    # positional args
+    argv__IFACE=""
+    argv__DRIVER=""
+    if [[ "$#" -ne 2 ]]; then
+        usage_linux
+        exit 1
+    fi
+    argv__IFACE="$1"
+    argv__DRIVER="$2"
+}
+
+init_ix()
+{
+    #optional args
+    getopt_results=$(getopt -s bash -o d:p:n:h --long dune:,pcidma:,numvfs:,help -- "$@")
+    if test $? != 0
+    then
+        echo "unrecognized option"
+        exit 1
+    fi
+    eval set -- "$getopt_results"
+
+    argv__DUNE=""
+    argv__PCIDMA=""
+    argv__NUMVFS=0
+    while true
+    do
+        case "$1" in
+            -d|--dune)
+                argv__DUNE=$2
+                shift 2
+                ;;
+            -p|--pcidma)
+                argv__PCIDMA=$2
+                shift 2
+                ;;
+            -n|--numvfs)
+                argv__NUMVFS=$2
+                shift 2
+                ;;
+            -h|--help)
+                usage_ix
+                exit 0
+                ;;
+            --)
+                shift
+                break
+                ;;
+            *)
+                EXCEPTION=$Main__ParameterException
+                EXCEPTION_MSG="unparseable option $1"
+                exit 1
+                ;;
+        esac
+    done
+
+    # positional args
+    argv__IFACE=""
+    if [[ "$#" -ne 1 ]]; then
+        usage_ix
+        exit 1
+    fi
+    argv__IFACE="$1"
+}
+
+init()
+{
+    argv__STACK=$1
+    if [[ -z "$argv__STACK" ]] ; then
+        usage
+        exit 1
+    fi
+    shift
+    if [[ "$argv__STACK" == "linux" ]] ; then
+        init_linux "$@"
+    elif [[ "$argv__STACK" == "ix" ]] ; then
+        init_ix "$@"
+    else 
+        usage
+        exit 1
+    fi
+}
+
+init_exceptions()
+{
+    EXCEPTION=0
+    EXCEPTION_MSG=""
+    #Main__Default_Unkown=1
+    Main__ParameterException=2
+}
+
+cleanup()
+{
+    echo cleanup: nothing to do.
+}
+
+Main__interruptHandler()
+{
+    # @description signal handler for SIGINT
+    echo "$0: SIGINT caught"
+    cleanup
+    exit
+}
+Main__terminationHandler()
+{
+    # @description signal handler for SIGTERM
+    echo "$0: SIGTERM caught"
+    cleanup
+    exit
+}
+Main__exitHandler()
+{
+    # @description signal handler for end of the program (clean or unclean).
+    # probably redundant call, we already call the cleanup in main.
+    if [[ "$EXCEPTION" -ne 0 ]] ; then
+        echo "$0: error : ${EXCEPTION_MSG}"
+        cleanup
+    fi
+    exit
+}
+
+FAIL()
+{
+    echo -e "$(hostname): error: $1" 1>&2
+    exit 1
+}
+
+WARN()
+{
+    echo -e "$(hostname): warning: $1" 1>&2
+}
+
+LOG()
+{
+    echo -e "$(hostname): $*"
+}
+
+disable_device() {
+    local PCI=$1
+    local DRIVER=$2
+    echo 0 > "/sys/bus/pci/devices/$PCI/sriov_numvfs"
+    rmmod dune >/dev/null 2>&1 || true
+    rmmod pcidma >/dev/null 2>&1 || true
+    modprobe -r "$DRIVER"
+    modprobe -r "${DRIVER}vf" 
+    #FIXME other vf drivers might not follow notation
+    # standards. require checking.
+    if ! [[ $(cat "/sys/bus/pci/devices/$PCI/enable") -eq 0 ]] ; then
+        echo 0 > "/sys/bus/pci/devices/$PCI/enable"
+    fi
+}
+
+basic_config() {
+    local PCI=$1
+    local DRIVER=$2
+    local IP=$3
+    local MASK=$4
+    modprobe "$DRIVER"
+    local NETDEV="$(basename /sys/bus/pci/devices/$PCI/net/*)"
+    if [[ -n $IP ]]; then
+        ifconfig "$NETDEV" "$IP" netmask "$MASK" up
+        LOG "Interface $G$NETDEV$W ready: $G$IP$W"
+    else
+        ifup "$NETDEV"
+        sleep 1
+        LOG "Interface $G$NETDEV$W ready: ($G$(ip addr show "$IFACE" | awk '/inet /{print $2}')$W)"
+    fi
+}
+
+check_ix_config(){
+    #check config
+    if ! lsmod | grep dune > /dev/null; then
+        WARN "Dune is not loaded."
+    fi
+    if ! lsmod | grep pcidma > /dev/null; then
+        WARN "pcidma is not loaded."
+    fi
+    if ! grep -v ^0 /sys/devices/system/node/node*/hugepages/hugepages-2048kB/nr_hugepages > /dev/null ; then
+        WARN "No 2MB pages found."
+    fi
+}
+
+ix_config(){
+    local DUNE=$1
+    local PCIDMA=$2
+    # insert dune
+    if [[ -n $DUNE ]] ; then
+        if lsmod | grep -cq dune ; then
+            WARN "insmod : dune already exists. skipping"
+        else
+            if [[ -f "$DUNE" ]] ; then
+                insmod "$DUNE" || WARN "could not execute 'insmod $DUNE. skipping."
+            else
+                WARN "$DUNE not found. provide dune PATH."
+            fi
+        fi
+    else
+        LOG "ignoring dune kernel module (required)."
+    fi
+
+    # insert pcidma
+    if [[ -n "$PCIDMA" ]] ; then
+        if lsmod | grep -cq pcidma ; then
+            WARN "insmod : pcidma already exists. skipping"
+        else
+            if [[ -f "$PCIDMA" ]] ; then
+                insmod "$PCIDMA" || WARN "could not execute 'insmod $PCIDMA'. skipping."
+           else
+                WARN "$PCIDMA not found. provide pcidma PATH."
+            fi
+        fi
+    else
+        LOG "ignoring pcidma kernel module (required)."
+    fi
+
+    # allocate hugepages
+    for i in /sys/devices/system/node/node*/hugepages/hugepages-2048kB/nr_hugepages;
+    do
+        echo 4096 > "$i"
+    done
+}
+
+vfs_config()
+{
+    local PCI=$1
+    local VFS=$2
+    local NETDEV="$(basename /sys/bus/pci/devices/$PCI/net/*)"
+    echo "$VFS" > "/sys/bus/pci/devices/$PCI/sriov_numvfs"
+    for (( i=0; i<"$VFS"; i++ )); do
+        local VFDEV="$(basename "$(readlink "/sys/bus/pci/devices/$PCI/virtfn$i")")"
+        local VNETDEV="$(basename /sys/bus/pci/devices/$VFDEV/net/*)"
+        ifconfig $VNETDEV 192.168.255.$i # dummy IP that is not used else.
+        LOG "Device $G$VFDEV$W ready."
+    done
+}
+
+cidr2mask() {
+    local i mask=""
+    local full_octets=$(($1/8))
+    local partial_octet=$(($1%8))
+
+    for ((i=0;i<4;i+=1)); do
+        if [ $i -lt $full_octets ]; then
+            mask+=255
+        elif [ $i -eq $full_octets ]; then
+            mask+=$((256 - 2**(8-$partial_octet)))
+        else
+            mask+=0
+        fi
+        test $i -lt 3 && mask+=.
+    done
+    echo $mask
+}
+
+valid_ip()
+{
+    local  ip=$1
+    local  stat=1
+
+    if [[ $ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+        OIFS=$IFS
+        IFS='.'
+        ip=($ip)
+        IFS=$OIFS
+        [[ ${ip[0]} -le 255 && ${ip[1]} -le 255 \
+            && ${ip[2]} -le 255 && ${ip[3]} -le 255 ]]
+        stat=$?
+    fi
+    return $stat
+}
+
+set_cpu_freq()
+{
+    # sets the CPU gouvernor
+    if [[ -f /sys/devices/system/cpu/cpu0/cpufreq/scaling_available_frequencies ]] ; then
+        local FREQ="$(awk '{ if ($1 - $2 > 1000) print $1; else print $2 }' /sys/devices/system/cpu/cpu0/cpufreq/scaling_available_frequencies)"
+        for i in /sys/devices/system/cpu/cpu*/cpufreq; do
+            echo userspace > "$i/scaling_governor"
+            echo "$FREQ" > "$i/scaling_setspeed"
+        done
+    else
+        WARN "Cannot set CPU frequency."
+    fi
+}
+
+client_linux()
+{
+    local IFACE=$1
+    local IP=$2
+    local DRIVER=$3
+    shift 3
+    local VF_IP=("$@")
+
+    modprobe -r "$DRIVER"
+    sleep 1
+    # try to modprobe the driver to get some more card info
+    modprobe "$DRIVER"
+    sleep 1
+
+    if ! [[ -d "/sys/class/net/$IFACE" ]]; then
+        FAIL "no interface $IFACE found."
+    fi
+    LOG "setting $argv__STACK config..."
+    local DEVICE="$(basename "$(readlink "/sys/class/net/$IFACE/device")")"
+    local MASK=""
+    if [[ -n $IP ]] ; then
+        arrIN=(${IP//\// })
+        IP=${arrIN[0]}
+        MASK=${arrIN[1]}
+        [[ -n "$MASK" ]] || FAIL "provide IP param in CIDR format <ip/mask>."
+        MASK="$(cidr2mask "$MASK")"
+    fi
+
+    if [[ ${#VF_IP[@]} -eq 0 ]]; then
+        # no vfs. config default interface:
+        disable_device "$DEVICE" "$DRIVER"
+        basic_config "$DEVICE" "$DRIVER" "$IP" "$MASK"
+    else
+        disable_device "$DEVICE" "$DRIVER"
+        basic_config "$DEVICE" "$DRIVER" "$IP" "$MASK"
+        vfs_config "$DEVICE" "${#VF_IP[@]}"
+        local c=0
+        for i in "${VF_IP[@]}"; do
+            local arrIN=(${i//\// })
+            local IP=${arrIN[0]}
+            local MASK=${arrIN[1]}
+            [[ -n "$MASK" ]] || FAIL "provide VFIP param(s) in CIDR format <ip/mask>."
+            MASK=$(cidr2mask "$MASK")
+            if valid_ip "$IP" && valid_ip "$MASK" ; then
+                local VFDEV=$(basename /sys/bus/pci/devices/$DEVICE/virtfn$c/net/*)
+                ifconfig "$VFDEV" "$IP" netmask "$MASK" up
+                LOG "Interface $G$VFDEV$W ready: $G$IP$W"
+            else
+                WARN "invalid VF_IP arg. provide CIDR notation IP. skipping"
+            fi 
+            c=$((c+1))
+        done
+    fi
+}
+
+client_ix()
+{
+    local IFACE=$1
+    local DUNE=${2:1}
+    local PCIDMA=${3:1}
+    local NUM_VFS=$4
+    if ! [[ -d "/sys/class/net/$IFACE" ]]; then
+        FAIL "no interface $IFACE found."
+    fi
+
+    LOG "setting $argv__STACK config..."
+    local DEVICE="$(basename "$(readlink "/sys/class/net/$IFACE/device")")"
+    local DRIVER="$(basename "$(readlink "/sys/class/net/$IFACE/device/driver/module")")"
+
+    if [ ${NUM_VFS} -eq 0 ]; then
+        # ix config without vfs :
+        disable_device "$DEVICE" "$DRIVER"
+        ix_config "$DUNE" "$PCIDMA"
+        check_ix_config
+        LOG "Device $G$DEVICE$W ready."
+    else
+        # get current network info
+        local HOST_ADDR="$(ip addr show "$IFACE" | awk '/inet /{print $2}')" || WARN "no previous network config found. Using default configuration : 192.168.1.10/16"
+        local IP=""
+        local MASK=""
+        if [[ -z "$HOST_ADDR" ]] ; then
+            IP=192.168.1.10
+            MASK=255.255.0.0
+        else
+            local arrIN=""
+            arrIN=(${HOST_ADDR//\// })
+            IP=${arrIN[0]}
+            MASK=${arrIN[1]}
+            MASK="$(cidr2mask "$MASK")"
+        fi
+        disable_device "$DEVICE" "$DRIVER"
+        ix_config "$DUNE" "$PCIDMA"
+        basic_config "$DEVICE" "$DRIVER" "$IP" "$MASK"
+        vfs_config "$DEVICE" "$NUM_VFS"
+        sleep 1
+        modprobe -r "${DRIVER}vf"
+        check_ix_config
+    fi
+    set_cpu_freq
+}
+
+trap Main__interruptHandler INT
+trap Main__terminationHandler TERM
+trap Main__exitHandler EXIT
+
+Main__main()
+{
+    # init scipt temporals
+    init_exceptions
+    init "$@"
+    # body
+    [ "$EUID" -eq 0 ] || exec sudo "$0" "$@"
+    if [[ "$argv__STACK" == linux ]] ; then
+        client_linux "$argv__IFACE" "$argv__IP" "$argv__DRIVER" "${argv__VFIP[@]}"
+    else
+        client_ix "$argv__IFACE" "d$argv__DUNE" "p$argv__PCIDMA" "$argv__NUMVFS"
+    fi
+    exit 0
+}
+
+# catch signals and exit
+#trap exit INT TERM EXIT
+
+Main__main "$@"
+

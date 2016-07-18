@@ -1,0 +1,63 @@
+#!/bin/bash
+
+set -e
+
+usage() {
+    echo "Usage: $(basename "$0") IFACE"
+}
+
+[ "$EUID" -eq 0 ] || exec sudo "$0" "$@"
+
+#optional args
+getopt_results=$(getopt -s bash -o h --long help -- "$@")
+if test $? != 0
+then
+    echo >&2 "unrecognized option"
+    exit 1
+fi
+eval set -- "$getopt_results"
+while true
+do
+    case "$1" in
+        h|--help)
+            usage
+            exit 0
+            ;;
+        --)
+            shift
+            break
+            ;;
+        *)
+            echo >&2 "unparseable option $1"
+            exit 1
+            ;;
+    esac
+done
+# positional args
+if [ "$#" -ne 1 ]; then
+    usage
+    exit 1
+fi
+IFACE="$1"
+
+# net info & write file
+HOST_ADDR="$(ip addr show "$IFACE" | awk '/inet /{print $2}')"
+DEVICE="$(basename "$(readlink "/sys/class/net/$IFACE/device")")"
+CPU="$(cat "/sys/class/net/$IFACE/device/local_cpulist")"
+
+if [[ "$CPU" =~ "-" ]] ; then
+    IFS=- read var1 var2 <<< "$CPU"
+    CPU="$(seq -s, "$var1" "$var2")"
+fi
+
+CONF="host_addr=\"$HOST_ADDR\"
+devices=\"$DEVICE\"
+cpu=[$CPU]
+gateway_addr=\"0.0.0.0\"
+port=8000
+batch=64
+loader_path=\"/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2\"
+"
+
+echo "$CONF"
+
