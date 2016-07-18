@@ -35,8 +35,6 @@
 #include <ix/errno.h>
 #include <ix/lock.h>
 
-#include <pcidma.h>
-
 #include <stdlib.h>
 #include <stdio.h>
 #include <unistd.h>
@@ -50,10 +48,6 @@
 #include <dune.h>
 
 #define PCI_SYSFS_PATH "/sys/bus/pci/devices"
-
-static int pcidma_fd;
-
-static DEFINE_SPINLOCK(pcidma_open_lock);
 
 static int sysfs_parse_val(const char *path, uint64_t *val)
 {
@@ -81,22 +75,6 @@ static int sysfs_parse_val(const char *path, uint64_t *val)
 		ret = -EIO;
 
 out:
-	fclose(f);
-	return ret;
-}
-
-static int sysfs_store_val(const char *path, uint64_t val)
-{
-	FILE *f;
-	int ret = 0;
-
-	f = fopen(path, "w");
-	if (!f)
-		return -EIO;
-
-	if (fprintf(f, "%ld", val) <= 0)
-		ret = -EIO;
-
 	fclose(f);
 	return ret;
 }
@@ -373,45 +351,4 @@ void pci_unmap_mem_bar(struct pci_bar *bar, void *vaddr)
 {
 	dune_vm_unmap(pgroot, vaddr, bar->len);
 	munmap(vaddr, bar->len);
-}
-
-int pci_enable_device(struct pci_dev *dev)
-{
-	char path[PATH_MAX];
-	struct pci_addr *addr;
-	uint64_t enable;
-
-	addr = &dev->addr;
-
-	snprintf(path, PATH_MAX, "%s/%04x:%02x:%02x.%d/enable", PCI_SYSFS_PATH, addr->domain, addr->bus, addr->slot, addr->func);
-	if (sysfs_parse_val(path, &enable))
-		return -EIO;
-
-	if (enable)
-		return 0;
-
-	if (sysfs_store_val(path, 1))
-		return -EIO;
-
-	return 0;
-}
-
-int pci_set_master(struct pci_dev *dev)
-{
-	struct args_enable args;
-
-	spin_lock(&pcidma_open_lock);
-	if (!pcidma_fd)
-		pcidma_fd = open("/dev/pcidma", O_RDONLY);
-	spin_unlock(&pcidma_open_lock);
-
-	if (pcidma_fd == -1)
-		return -EIO;
-
-	args.pci_loc.domain = dev->addr.domain;
-	args.pci_loc.bus = dev->addr.bus;
-	args.pci_loc.slot = dev->addr.slot;
-	args.pci_loc.func = dev->addr.func;
-
-	return ioctl(pcidma_fd, PCIDMA_ENABLE, &args);
 }

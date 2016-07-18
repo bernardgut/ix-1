@@ -248,3 +248,25 @@ void eth_process_reclaim(void)
 	}
 }
 
+/* eth_rx_idle_wait - idle the cpu for usecs usecs if no queue is active
+ * on this cpu
+ *
+ * returns true if idle succeeded, false if a queue was active,*/
+int eth_rx_idle_wait(uint64_t usecs)
+{
+	unsigned int i;
+	unsigned long start, cycles = usecs * cycles_per_us;
+	struct eth_rx_queue *rx;
+
+	start = rdtsc();
+	do {
+		for (i = 0; i < percpu_get(eth_num_queues); i++) {
+			rx = percpu_get(eth_rxqs[i]);
+			if (rx->active(rx))
+				return 1;
+		}
+		cpu_relax();
+	} while (rdtsc() - start < cycles);
+
+	return false;
+}

@@ -27,12 +27,50 @@
 
 #include <string.h>
 
+/* For struct sockaddr */
+#include <sys/socket.h>
+
+/* General DPDK includes */
+#include <rte_config.h>
+#include <rte_ethdev.h>
+/* Overrides from DPDK in ix */
+#undef likely
+#undef unlikely
+#undef EDEADLK
+#undef EAGAIN
+#undef ENAMETOOLONG
+#undef ENOTEMPTY
+#undef ENOLCK
+#undef ENOSYS
+#undef EBADMSG
+#undef EMULTIHOP
+#undef ENOLINK
+#undef EPROTO
+#undef LIST_HEAD
+#undef PKT_TX_IP_CKSUM
+#undef ETH_LINK_SPEED_AUTONEG
+#undef ETH_LINK_HALF_DUPLEX
+#undef ETH_LINK_FULL_DUPLEX
+#undef ETH_RSS
+#undef VMDQ_DCB
+#undef ETH_DCB_RX
+#undef ETH_DCB_NONE
+#undef ETH_VMDQ_DCB_TX
+#undef ETH_DCB_TX
+#undef ETH_RSS_IPV4
+#undef ETH_RSS_IPV6
+#undef ETH_RSS_IPV6_EX
+#undef ETH_RSS_IPV6_TCP_EX
+#undef ETH_RSS_IPV6_UDP_EX
+#undef PKT_TX_TCP_CKSUM
+
 #include <ix/stddef.h>
 #include <ix/errno.h>
 #include <ix/ethdev.h>
 #include <ix/log.h>
 #include <ix/cpu.h>
 #include <ix/cfg.h>
+#include <drivers/ixgbe.h>
 
 #include <net/ethernet.h>
 
@@ -89,16 +127,13 @@ void eth_dev_set_hw_mac(struct ix_rte_eth_dev *dev, struct eth_addr *mac_addr)
 int eth_dev_add(struct ix_rte_eth_dev *dev)
 {
 	int ret, i;
-	struct ix_rte_eth_dev_info dev_info;
-
-	dev->dev_ops->dev_infos_get(dev, &dev_info);
 
 	dev->data->nb_rx_queues = 0;
 	dev->data->nb_tx_queues = 0;
 
 	dev->data->max_rx_queues =
-		min(dev_info.max_rx_queues, ETH_RSS_RETA_MAX_QUEUE);
-	dev->data->max_tx_queues = dev_info.max_tx_queues;
+		min(dev->dev_info->max_rx_queues, ETH_RSS_RETA_MAX_QUEUE);
+	dev->data->max_tx_queues = dev->dev_info->max_tx_queues;
 
 	dev->data->rx_queues = malloc(sizeof(struct eth_rx_queue *) *
 				      dev->data->max_rx_queues);
@@ -112,7 +147,7 @@ int eth_dev_add(struct ix_rte_eth_dev *dev)
 		goto err_tx_queues;
 	}
 
-	dev->data->nb_rx_fgs = dev_info.nb_rx_fgs;
+	dev->data->nb_rx_fgs = ETH_MAX_NUM_FG;
 	dev->data->rx_fgs = malloc(sizeof(struct eth_fg) *
 				   dev->data->nb_rx_fgs);
 	if (!dev->data->rx_fgs) {
@@ -337,6 +372,13 @@ struct ix_rte_eth_dev *eth_dev_alloc(size_t private_len)
 
 	memset(dev->data->dev_private, 0, private_len);
 
+	dev->dev_info = malloc(sizeof(struct rte_eth_dev_info));
+	if (!dev->dev_info) {
+		free(dev->data->dev_private);
+		free(dev->data);
+		free(dev);
+		return NULL;
+	}
 	return dev;
 }
 
@@ -354,3 +396,155 @@ void eth_dev_destroy(struct ix_rte_eth_dev *dev)
 	free(dev);
 }
 
+enum rte_eth_rx_mq_mode translate_conf_rxmode_mq_mode(enum ix_rte_eth_rx_mq_mode in)
+{
+	switch (in) {
+	case IX_ETH_MQ_RX_RSS:
+				return ETH_MQ_RX_RSS;
+		default:
+			assert(false);
+		}
+}
+
+enum rte_eth_tx_mq_mode translate_conf_txmode_mq_mode(enum ix_rte_eth_tx_mq_mode in)
+{
+	switch (in) {
+	case IX_ETH_MQ_TX_NONE:
+				return ETH_MQ_TX_NONE;
+		default:
+			assert(false);
+		}
+}
+
+uint16_t translate_conf_rss_hf(uint16_t in)
+{
+	uint16_t out = 0;
+
+#define COPY_AND_RESET(dst, src, bit_out, bit_in) \
+	if ((src) & (bit_in)) { \
+		(dst) |= (bit_out); \
+		(src) &= ~(bit_in); \
+	}
+
+	COPY_AND_RESET(out, in, ETH_RSS_NONFRAG_IPV4_TCP, ETH_RSS_IPV4_TCP);
+	COPY_AND_RESET(out, in, ETH_RSS_NONFRAG_IPV4_UDP, ETH_RSS_IPV4_UDP);
+
+#undef COPY_AND_RESET
+
+	assert(in == 0);
+
+	return out;
+}
+
+void translate_conf(struct rte_eth_conf *out, struct ix_rte_eth_conf *in)
+{
+	char *p;
+
+	memset(out, 0, sizeof(struct rte_eth_conf));
+
+#define COPY_AND_RESET(field) \
+	do { \
+		out->field = in->field; \
+		in->field = 0; \
+	} while (0)
+
+#define COPY_AND_RESET2(field, f) \
+	do { \
+		out->field = f(in->field); \
+		in->field = 0; \
+	} while (0)
+
+	COPY_AND_RESET2(rx_adv_conf.rss_conf.rss_hf, translate_conf_rss_hf);
+	COPY_AND_RESET(rxmode.header_split);
+	COPY_AND_RESET(rxmode.hw_ip_checksum);
+	COPY_AND_RESET(rxmode.hw_strip_crc);
+	COPY_AND_RESET(rxmode.hw_vlan_filter);
+	COPY_AND_RESET(rxmode.jumbo_frame);
+	COPY_AND_RESET2(rxmode.mq_mode, translate_conf_rxmode_mq_mode);
+	COPY_AND_RESET(rxmode.split_hdr_size);
+	COPY_AND_RESET2(txmode.mq_mode, translate_conf_txmode_mq_mode);
+
+#undef COPY_AND_RESET
+#undef COPY_AND_RESET2
+
+	for (p = (char *) in; p < (char *) in + sizeof(*in); p++)
+		assert(!*p);
+}
+
+
+int ix_eth_dev_init(const struct pci_addr *addr, struct ix_rte_eth_dev **ethp)
+{
+	int i;
+	int ret;
+	struct ix_rte_eth_dev *dev;
+	struct rte_eth_conf conf;
+	uint8_t portid;
+	uint8_t nb_ports;
+	bool found=false;
+
+	dev = eth_dev_alloc(1);
+
+	/* get the correct dev portid */
+	nb_ports = rte_eth_dev_count();
+	if(nb_ports == 0)
+		panic("No Ethernet ports - bye.\n");
+	log_err("nb ports : %u\n", nb_ports);
+	portid=0;
+	while(!found && portid < nb_ports){
+		rte_eth_dev_info_get(portid, dev->dev_info);
+		if(dev->dev_info->pci_dev->addr.domain == addr->domain
+				&& dev->dev_info->pci_dev->addr.bus == addr->bus
+				&& dev->dev_info->pci_dev->addr.devid == addr->slot
+				&& dev->dev_info->pci_dev->addr.function == addr->func){
+			found=true;
+			break;
+		}
+		portid++;
+	}
+	if(!found)
+		panic("requested device %04x:%02x:%02x.%d not found.\n",
+				addr->domain, addr->bus,
+				addr->slot, addr->func );
+
+	/* set the custom driver dev_start functions*/
+	if (strcmp(dev->dev_info->driver_name, "rte_ixgbe_pmd") == 0){
+		dev->dev_ops = &ixgbe_dev_ops;
+	} else if (strcmp(dev->dev_info->driver_name, "rte_ixgbevf_pmd") == 0){
+		dev->dev_ops = &ixgbevf_dev_ops;
+	} else {
+		panic("No valid IX driver available. abort.");
+	}
+
+	/* configure the port */
+	translate_conf(&conf, &dev->data->dev_conf);
+	conf.fdir_conf.mode = RTE_FDIR_MODE_PERFECT;
+	conf.fdir_conf.pballoc = RTE_FDIR_PBALLOC_256K;
+	conf.fdir_conf.status = RTE_FDIR_REPORT_STATUS;
+	conf.fdir_conf.mask.vlan_tci_mask = 0x0;
+	conf.fdir_conf.mask.ipv4_mask.src_ip = 0xFFFFFFFF;
+	conf.fdir_conf.mask.ipv4_mask.dst_ip = 0xFFFFFFFF;
+	conf.fdir_conf.mask.src_port_mask = 0xFFFF;
+	conf.fdir_conf.mask.dst_port_mask = 0xFFFF;
+	conf.fdir_conf.mask.mac_addr_byte_mask = 0;
+	conf.fdir_conf.mask.tunnel_type_mask = 0;
+	conf.fdir_conf.mask.tunnel_id_mask = 0;
+	conf.fdir_conf.drop_queue = 127;
+	conf.fdir_conf.flex_conf.nb_payloads = 0;
+	conf.fdir_conf.flex_conf.nb_flexmasks = 0;
+
+	ret = rte_eth_dev_configure(portid, dev->dev_info->max_rx_queues, dev->dev_info->max_tx_queues, &conf);
+	if (ret < 0){
+		log_err("rte_eth_dev_configure : error %i\n", ret);
+		return ret;
+	}
+	/* Init eth_dev */
+	dev->port = portid;
+	spin_lock_init(&dev->lock);
+
+	dev->data->mac_addrs = calloc(1, ETH_ADDR_LEN);
+	for (i = 0; i < ETHER_ADDR_LEN; i++)
+		dev->data->mac_addrs[0].addr[i] = rte_eth_devices[portid].data->mac_addrs[0].addr_bytes[i];
+	*ethp = dev;
+
+	return 0;
+}

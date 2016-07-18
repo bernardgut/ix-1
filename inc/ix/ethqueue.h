@@ -55,10 +55,14 @@ struct eth_rx_queue {
 	/* poll for new packets */
 	int (*poll)(struct eth_rx_queue *rx);
 
+	/* check if queue is active. 1 if queue active 0 otherwise */
+	int (*active)(struct eth_rx_queue *rx);
+
 	/* a bitmap of flow groups directed to this queue */
 	DEFINE_BITMAP(assigned_fgs, ETH_MAX_NUM_FG);
 
 	struct ix_rte_eth_dev *dev;
+	void *drv_rx_queue; /*pointer to driver queue data*/
 };
 
 /**
@@ -103,9 +107,6 @@ static inline int eth_recv(struct eth_rx_queue *rxq, struct mbuf *mbuf)
 	return 0;
 }
 
-extern bool eth_rx_idle_wait(uint64_t max_usecs);
-
-
 /*
  * Transmit Queue API
  */
@@ -117,6 +118,8 @@ struct eth_tx_queue {
 
 	int (*reclaim)(struct eth_tx_queue *tx);
 	int (*xmit)(struct eth_tx_queue *tx, int nr, struct mbuf **mbufs);
+
+	void *drv_tx_queue; /* driver queue*/
 };
 
 /**
@@ -192,4 +195,4 @@ extern int eth_process_poll(void);
 extern int eth_process_recv(void);
 extern void eth_process_send(void);
 extern void eth_process_reclaim(void);
-
+extern int eth_rx_idle_wait(uint64_t max_usecs);

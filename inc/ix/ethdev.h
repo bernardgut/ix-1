@@ -673,24 +673,7 @@ struct ix_rte_eth_conf {
 #define DEV_TX_OFFLOAD_TCP_TSO     0x00000020
 #define DEV_TX_OFFLOAD_UDP_TSO     0x00000040
 
-struct ix_rte_eth_dev_info {
-	struct pci_dev *pci_dev; /**< Device PCI information. */
-	const char *driver_name; /**< Device Driver name. */
-	uint32_t min_rx_bufsize; /**< Minimum size of RX buffer. */
-	uint32_t max_rx_pktlen; /**< Maximum configurable length of RX pkt. */
-	uint16_t max_rx_queues; /**< Maximum number of RX queues. */
-	uint16_t max_tx_queues; /**< Maximum number of TX queues. */
-	uint16_t nb_rx_fgs;	/**< The number of flow groups. */
-	uint32_t max_mac_addrs; /**< Maximum number of MAC addresses. */
-	uint32_t max_hash_mac_addrs;
-	/** Maximum number of hash MAC addresses for MTA and UTA. */
-	uint16_t max_vfs; /**< Maximum number of VFs. */
-	uint16_t max_vmdq_pools; /**< Maximum number of VMDq pools. */
-	uint32_t rx_offload_capa; /**< Device RX offload capabilities. */
-	uint32_t tx_offload_capa; /**< Device TX offload capabilities. */
-};
 
-struct ix_rte_eth_dev;
 
 /*
  * Definitions of all functions exported by an Ethernet driver through the
@@ -737,10 +720,7 @@ typedef int (*ix_eth_queue_stats_mapping_set_t)(struct ix_rte_eth_dev *dev,
 		uint16_t queue_id,
 		uint8_t stat_idx,
 		uint8_t is_rx);
-/**< @internal Set a queue statistics mapping for a tx/rx queue of an Ethernet device. */
 
-typedef void (*ix_eth_dev_infos_get_t)(struct ix_rte_eth_dev *dev,
-				       struct ix_rte_eth_dev_info *dev_info);
 /**< @internal Get specific informations of an Ethernet device. */
 
 typedef int (*ix_eth_rx_queue_setup_t)(struct ix_rte_eth_dev *dev,
@@ -908,7 +888,6 @@ struct ix_eth_dev_ops {
 	ix_eth_stats_reset_t          stats_reset;   /**< Reset device statistics. */
 	ix_eth_queue_stats_mapping_set_t queue_stats_mapping_set;
 	/**< Configure per queue stat counter mapping. */
-	ix_eth_dev_infos_get_t        dev_infos_get; /**< Get device info. */
 	ix_vlan_filter_set_t          vlan_filter_set;  /**< Filter VLAN Setup. */
 	ix_vlan_tpid_set_t            vlan_tpid_set;      /**< Outer VLAN TPID Setup. */
 	ix_vlan_strip_queue_set_t     vlan_strip_queue_set; /**< VLAN Stripping on queue. */
@@ -969,6 +948,7 @@ struct ix_rte_eth_dev {
 	struct ix_rte_eth_dev_data *data;  /**< Pointer to device data */
 	struct ix_eth_dev_ops *dev_ops;    /**< Functions exported by PMD */
 	struct pci_dev *pci_dev; /**< PCI info. supplied by probing */
+	struct rte_eth_dev_info *dev_info; /**< DEV info.*/
 	uint8_t port;
 	spinlock_t lock;
 };
@@ -1033,7 +1013,7 @@ extern int eth_dev_start(struct ix_rte_eth_dev *dev);
 extern void eth_dev_stop(struct ix_rte_eth_dev *dev);
 extern int eth_dev_get_rx_queue(struct ix_rte_eth_dev *dev, struct eth_rx_queue **rx_queue);
 extern int eth_dev_get_tx_queue(struct ix_rte_eth_dev *dev, struct eth_tx_queue **tx_queue);
-
+extern int ix_eth_dev_init(const struct pci_addr *addr, struct ix_rte_eth_dev **ethp);
 
 /*
  * globals

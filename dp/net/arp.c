@@ -33,7 +33,6 @@
 
 #include <ix/stddef.h>
 #include <ix/errno.h>
-#include <ix/list.h>
 #include <ix/timer.h>
 #include <ix/hash.h>
 #include <ix/mempool.h>

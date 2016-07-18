@@ -28,7 +28,6 @@
 #pragma once
 
 #include <ix/stddef.h>
-#include <ix/list.h>
 #include <ix/lock.h>
 #include <ix/cpu.h>
 #include <assert.h>

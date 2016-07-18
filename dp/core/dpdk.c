@@ -35,6 +35,7 @@
 #include <eal_internal_cfg.h>
 #include <rte_ethdev.h>
 #include <rte_mbuf.h>
+#include <rte_errno.h>
 
 /* IX includes */
 #include <ix/log.h>
@@ -59,15 +60,14 @@ int dpdk_init(void)
 	const int pool_size = 32768;
 
 	optind = 0;
-	internal_config.no_hugetlbfs = 1;
+	//internal_config.no_hugetlbfs = 1;
 	ret = rte_eal_init(sizeof(argv) / sizeof(argv[0]), argv);
 	if (ret < 0)
 		return ret;
 
 	dpdk_pool = rte_pktmbuf_pool_create("mempool", pool_size, pool_cache_size, 0, pool_buffer_size, rte_socket_id());
 	if (dpdk_pool == NULL)
-		panic("Cannot create DPDK pool\n");
-
+		panic("Cannot create DPDK pool : %s\n", rte_strerror(rte_errno));
 	return 0;
 }
 

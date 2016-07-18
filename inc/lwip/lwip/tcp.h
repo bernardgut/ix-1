@@ -60,7 +60,6 @@ c * All rights reserved.
 #if LWIP_TCP /* don't build if not configured for use in lwipopts.h */
 
 #include <ix/timer.h>
-#include <ix/list.h>
 #include <net/ethernet.h>
 
 #include "lwip/mem.h"

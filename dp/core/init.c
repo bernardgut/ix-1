@@ -66,8 +66,8 @@ extern int net_init(void);
 extern int tcp_api_init(void);
 extern int tcp_api_init_cpu(void);
 extern int tcp_api_init_fg(void);
-extern int ixgbe_init(struct pci_dev *pci_dev,
-		      struct ix_rte_eth_dev **ethp);
+extern int eth_dev_init(const struct pci_addr *addr,
+		     struct ix_rte_eth_dev **ethp);
 extern int sandbox_init(int argc, char *argv[]);
 extern void tcp_init(struct eth_fg *);
 extern int cp_init(void);
@@ -148,31 +148,11 @@ static int init_ethdev(void)
 	int i;
 	for (i = 0; i < CFG.num_ethdev; i++) {
 		const struct pci_addr *addr = &CFG.ethdev[i];
-		struct pci_dev *dev;
 		struct ix_rte_eth_dev *eth;
 
-		dev = pci_alloc_dev(addr);
-		if (!dev)
-			return -ENOMEM;
-
-		ret = pci_enable_device(dev);
-		if (ret) {
-			log_err("init: failed to enable PCI device\n");
-			free(dev);
-			goto err;
-		}
-
-		ret = pci_set_master(dev);
-		if (ret) {
-			log_err("init: failed to set master\n");
-			free(dev);
-			goto err;
-		}
-
-		ret = ixgbe_init(dev, &eth);
+		ret = ix_eth_dev_init(addr, &eth);
 		if (ret) {
 			log_err("init: failed to start driver\n");
-			free(dev);
 			goto err;
 		}
 
@@ -211,7 +191,6 @@ static int init_network_cpu(void)
 		}
 	}
 	spin_unlock(&assign_lock);
-
 	percpu_get(eth_num_queues) = eth_dev_count;
 
 
@@ -255,7 +234,6 @@ static int init_create_cpu(unsigned int cpu, int first)
 
 
 	log_info("init: CPU %d ready\n", cpu);
-	printf("init:CPU %d ready\n", cpu);
 	return 0;
 }
 
