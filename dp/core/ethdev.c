@@ -71,6 +71,7 @@
 #include <ix/cpu.h>
 #include <ix/cfg.h>
 #include <drivers/ixgbe.h>
+#include <drivers/i40e.h>
 
 #include <net/ethernet.h>
 
@@ -511,6 +512,10 @@ int ix_eth_dev_init(const struct pci_addr *addr, struct ix_rte_eth_dev **ethp)
 		dev->dev_ops = &ixgbe_dev_ops;
 	} else if (strcmp(dev->dev_info->driver_name, "rte_ixgbevf_pmd") == 0){
 		dev->dev_ops = &ixgbevf_dev_ops;
+	} else if (strcmp(dev->dev_info->driver_name, "rte_i40e_pmd") == 0){
+		dev->dev_ops = &i40e_dev_ops;
+	} else if (strcmp(dev->dev_info->driver_name, "rte_i40evf_pmd") == 0){
+		dev->dev_ops = &i40evf_dev_ops;
 	} else {
 		panic("No valid IX driver available. abort.");
 	}

@@ -29,12 +29,33 @@
 #include <unistd.h>
 
 /* General DPDK includes */
-#include <rte_config.h> 
+#include <rte_config.h>
 #include <rte_ethdev.h>
 
 /* DPDK ixgbe includes */
 #include <base/ixgbe_type.h>
 #include <ixgbe_rxtx.h>
+
+/* Defines from ixgbe that override i40e*/
+#undef DEBUGFUNC
+#undef DEBUGOUT
+#undef DEBUGOUT1
+#undef DEBUGOUT2
+#undef DEBUGOUT3
+#undef DEBUGOUT6
+#undef DEBUGOUT7
+#undef UNREFERENCED_1PARAMETER
+#undef UNREFERENCED_2PARAMETER
+#undef UNREFERENCED_3PARAMETER
+#undef UNREFERENCED_4PARAMETER
+
+
+/* DPDK i40e includes */
+#ifndef X722_SUPPORT
+#define X722_SUPPORT
+#endif
+#include <base/i40e_type.h>
+#include <i40e_rxtx.h>
 
 /* Defines from IX override DPDK */
 #undef EAGAIN
@@ -61,7 +82,6 @@
  #undef ETH_RSS_IPV6_UDP_EX
  #undef ETH_VMDQ_DCB_TX
  #undef IXGBE_MIN_RING_DESC
- #undef LIST_HEAD
  #undef PKT_TX_IP_CKSUM
  #undef PKT_TX_TCP_CKSUM
  #undef VMDQ_DCB

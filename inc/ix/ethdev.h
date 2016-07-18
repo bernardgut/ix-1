@@ -222,7 +222,7 @@ struct ix_rte_eth_rss_conf {
 #define ETH_RSS_IPV6_UDP    0x0080 /**< IPv6/UDP packet. */
 #define ETH_RSS_IPV6_UDP_EX 0x0100 /**< IPv6/UDP with extension headers. */
 /* Definitions used for redirection table entry size */
-#define ETH_RSS_RETA_NUM_ENTRIES 128
+#define ETH_RSS_RETA_NUM_ENTRIES 512
 #define ETH_RSS_RETA_MAX_QUEUE   16
 
 /* Definitions used for VMDQ and DCB functionality */

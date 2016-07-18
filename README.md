@@ -13,6 +13,7 @@ IX requires Intel DPDK and a supported Intel NIC:
 - Intel 82599
 - Intel X520
 - Intel X540
+- Intel X710/XL710
 
 For more details, check the [requirements page](https://github.com/ix-project/ix/wiki/Requirements)
 
